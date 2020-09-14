@@ -1,0 +1,732 @@
+heat_template_version: 2018-08-31
+
+description: Template to deploy an ELK Cluster
+
+parameter_groups:
+- label: General
+  description: General Cluster Parameters
+  parameters:
+  - esearch_cluster_name
+  - master_flavor
+  - data_flavor
+  - index_flavor
+- label: Secuirty
+  description: Cluster Secuirty Parameters
+  parameters:
+  - key_name
+  - security_group
+- label: Network
+  description: Cluster Network Parameters
+  parameters:
+  - first_master_internal_ip
+  - second_master_internal_ip
+  - third_master_internal_ip
+  - data_vip
+  - index_vip
+  - external_network_name
+  - internal_network_name
+  - internal_network_subnet_name
+
+parameters:
+  esearch_cluster_name:
+    type: string
+    label: ElasticSearch Cluster Name
+    description: The name for the ES cluster to be built
+    default: Walz_ES
+  
+  master_flavor:
+    type: string
+    label: Master node flavor
+    description: Flavor used for Master Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+  
+  data_flavor:
+    type: string
+    label: Data node flavor
+    description: Flavor used for Data Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+
+  index_flavor:
+    type: string
+    label: Index node flavor
+    description: Flavor used for Index Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+  
+  kibana_flavor:
+    type: string
+    label: Kibana node flavor
+    description: Flavor used for Kibana Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+  
+  logstash_flavor:
+    type: string
+    label: Logstash node flavor
+    description: Flavor used for Logstash Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+  
+
+  security_group:
+    type: string
+    label: Security Group
+    description: SG Used for ELK Cluster
+    default: default
+
+  key_name:
+    type: string
+    label: Key Pair
+    description: Name of an existing key pair to use for the instances
+    constraints:
+      - custom_constraint: nova.keypair
+        
+  first_master_internal_ip:
+    type: string
+    label: Static IP for first master
+    description: The IP for the first master node
+    default: 10.0.0.20
+
+  second_master_internal_ip:
+    type: string
+    label: Static IP for second master
+    description: The IP for the second master node
+    default: 10.0.0.21
+
+  third_master_internal_ip:
+    type: string
+    label: Static IP for third master
+    description: The IP for the third master node
+    default: 10.0.0.22
+
+  data_vip:
+    type: string
+    label: Static IP for Data LoadBalancer
+    description: The IP for the data LB
+    default: 10.0.0.10
+
+  index_vip:
+    type: string
+    label: Static IP for Index LoadBalancer
+    description: The IP for the index LB
+    default: 10.0.0.11
+
+  external_network_name:
+    type: string
+    label: External Network Name
+    description: External Network to use for Folating IPs
+    constraints:
+      - custom_constraint: neutron.network
+
+  internal_network_name:
+    type: string
+    label: Internal Network Name
+    description: Internal Network to use for instance IPs
+    constraints:
+      - custom_constraint: neutron.network
+  
+  internal_network_subnet_name:
+    type: string
+    label: Internal Subnet Name
+    description: Internal Subnet to use for instance IPs
+    default: Walz_Subnet
+
+resources:
+
+  wait_condition:
+    type: OS::Heat::WaitCondition
+    properties:
+      handle: {get_resource: wait_handle}      
+      timeout: 600
+
+  wait_handle:
+    type: OS::Heat::WaitConditionHandle
+  
+  name_gen_data1:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+
+  name_gen_data2:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_data3:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_index1:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+          
+  name_gen_index2:
+      type: OS::Heat::RandomString
+      properties:
+          length: 4
+          sequence: digits
+
+
+  monitor:
+    type: OS::Neutron::HealthMonitor
+    properties:
+      type: TCP
+      delay: 15
+      max_retries: 5
+      timeout: 10
+      
+
+  lb_data_pool:
+    type: OS::Neutron::Pool
+    properties:
+      name: 
+        str_replace:
+          template: $PART_CL-datalb
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      protocol: TCP
+      subnet_id: { get_param: internal_network_subnet_name }
+      lb_method: LEAST_CONNECTIONS
+      monitors: [ { get_resource: monitor } ]      
+      vip:
+        name: front_vip
+        address: { get_param: data_vip }
+        description: Front-end virtual IP (VIP)
+        protocol_port: 9200
+        
+  lb_index_pool:
+    type: OS::Neutron::Pool
+    properties:
+      name: 
+        str_replace:
+          template: $PART_CL-indexlb
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      protocol: TCP
+      subnet_id: { get_param: internal_network_subnet_name }
+      lb_method: LEAST_CONNECTIONS
+      monitors: [ { get_resource: monitor } ]      
+      vip:
+        name: front_vip
+        address: { get_param: index_vip }
+        description: Front-end virtual IP (VIP)
+        protocol_port: 9200        
+
+  lb_data_lbaas:
+    type: OS::Neutron::LoadBalancer
+    properties: 
+      pool_id: { get_resource: lb_data_pool }
+      protocol_port: 9200   
+            
+  lb_index_lbaas:
+    type: OS::Neutron::LoadBalancer
+    properties: 
+      pool_id: { get_resource: lb_index_pool }
+      protocol_port: 9200                     
+
+
+
+  floating_ip_master1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+  floating_ip_master2:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }
+      
+  floating_ip_master3:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }   
+
+  association_master1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_master1 }   
+      server_id: { get_resource: master1 }
+      
+  association_master2:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_master2 }
+      server_id: { get_resource: master2 }
+      
+  association_master3:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_master3 }
+      server_id: { get_resource: master3 }
+
+  instance_port_master1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: first_master_internal_ip } } ]
+      
+  instance_port_master2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name }
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: second_master_internal_ip } } ]
+      
+  instance_port_master3:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips: [{"subnet": { get_param: internal_network_subnet_name }, "ip_address": { get_param: third_master_internal_ip } } ]
+
+  instance_port_data1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }     
+        
+  instance_port_data2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }      
+        
+  instance_port_data3:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }       
+        
+  instance_port_index1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }     
+        
+  instance_port_index2:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }
+        
+  instance_port_kibana1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }          
+        
+  instance_port_logstash1:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }                          
+
+
+  floating_ip_kibana1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }                  
+      
+  floating_ip_logstash1:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: external_network_name }     
+
+
+  association_kibana1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_kibana1 }
+      server_id: { get_resource: kibana1 }      
+      
+  association_logstash1:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip_logstash1 }
+      server_id: { get_resource: logstash1 }  
+
+
+  master1:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: elastic-master
+      name: 
+        str_replace:
+          template: $PART_CL-master-1
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: master_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_master1 }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_master
+
+  master2:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: elastic-master
+      name: 
+        str_replace:
+          template: $PART_CL-master-2
+          params:
+            $PART_CL: { get_param: esearch_cluster_name }
+      flavor: { get_param: master_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_master2 }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_master
+
+  master3:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: elastic-master
+      name: 
+        str_replace:
+          template: $PART_CL-master-3
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: master_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_master3 }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_master
+
+  data1:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]
+    properties:
+      metadata:
+        type: elastic-data
+      name: 
+        str_replace:
+          template: $PART_CL-data-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_data1 }
+      flavor: { get_param: data_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_data1 }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_data
+
+  data2:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]
+    properties:
+      metadata:
+        type: elastic-data
+      name: 
+        str_replace:
+          template: $PART_CL-data-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_data2 }
+      flavor: { get_param: data_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_data2 }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_data
+
+  data3:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]
+    properties:
+      metadata:
+        type: elastic-data
+      name: 
+        str_replace:
+          template: $PART_CL-data-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_data3 }
+      flavor: { get_param: data_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_data3 }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_data
+
+  index1:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]    
+    properties:
+      metadata:
+        type: elastic-index
+      name: 
+        str_replace:
+          template: $PART_CL-index-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_index1 }
+      flavor: { get_param: index_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_index1 }
+      key_name: {get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_index
+       
+  index2:
+    type: OS::Nova::Server
+    depends_on: [ master1, master2, master3 ]    
+    properties:
+      metadata:
+        type: elastic-index
+      name: 
+        str_replace:
+          template: $PART_CL-index-$RANDNUM
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+            $RANDNUM: { get_resource: name_gen_index2 }
+      flavor: { get_param: index_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_index2 }
+      key_name: {get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_index
+  
+  kibana1:
+    type: OS::Nova::Server
+    depends_on: [ index1, index2 ]
+    properties:
+      metadata:
+        type: kibana
+      name: 
+        str_replace:
+          template: $PART_CL-kibana-1
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: kibana_lavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_kibana1 }
+      key_name: {get_param: key_name }
+      #user_data_format: SOFTWARE_CONFIG
+      #user_data:
+      # get_resource: cloud_init_userdata_kibana
+       
+  logstash1:
+    type: OS::Nova::Server
+    depends_on: [ data1, data2, data3 ]
+    properties:
+      metadata:
+        type: logstash
+      name: 
+        str_replace:
+          template: $PART_CL-logstash-1
+          params:
+            $PART_CL: {get_param: esearch_cluster_name }
+      flavor: { get_param: logstash_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_logstash1 }
+      key_name: {get_param: key_name }
+      #user_data_format: SOFTWARE_CONFIG
+      #user_data:
+      # get_resource: cloud_init_userdata_logstash
+       
+
+
+
+  cloud_init_userdata_master:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_master}
+
+  cloud_config_master:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       write_files:
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+                __master1ip__: {get_param: first_master_internal_ip }
+                __master2ip__: {get_param: second_master_internal_ip }
+                __master3ip__: {get_param: third_master_internal_ip }
+                __clustername__: { get_param: esearch_cluster_name }
+              template: |
+                #!/bin/bash
+                sudo apt-get -y update
+                sudo apt-get -y dist-upgrade 
+                sudo apt-get -y install apt-transport-https
+                echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-7.x.list
+                sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys D27D666CD88E42B4
+                sudo apt-get -y update && sudo apt-get -y install elasticsearch
+                echo "__master1ip__ __clustername__-master-1" >> /etc/hosts
+                echo "__master2ip__ __clustername__-master-2" >> /etc/hosts
+                echo "__master3ip__ __clustername__-master-3" >> /etc/hosts
+                echo "cluster.name: __clustername__" > /etc/elasticsearch/elasticsearch.yml
+                echo "network.host: $(hostname -s)" >> /etc/elasticsearch/elasticsearch.yml
+                echo "node.name: $(hostname -s)" >> /etc/elasticsearch/elasticsearch.yml
+                echo "cluster.initial_master_nodes: [__master1ip__, __master2ip__, __master3ip__]" >> /etc/elasticsearch/elasticsearch.yml
+                echo "path.data: /var/lib/elasticsearch" >> /etc/elasticsearch/elasticsearch.yml
+                echo "path.logs: /var/lib/elasticsearch" >> /etc/elasticsearch/elasticsearch.yml                
+                echo "xpack.security.enabled: false" >> /etc/elasticsearch/elasticsearch.yml               
+                echo "node.master: true" >> /etc/elasticsearch/elasticsearch.yml 
+                echo "node.data: false" >> /etc/elasticsearch/elasticsearch.yml
+                echo "node.ingest: false" >> /etc/elasticsearch/elasticsearch.yml
+                echo "discovery.zen.ping.unicast.hosts: [__master1ip__, __master2ip__, __master3ip__]" >> /etc/elasticsearch/elasticsearch.yml
+                service elasticsearch restart
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+
+  
+
+  cloud_init_userdata_data:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_data}
+
+  cloud_config_data:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+                __master1ip__: {get_param: first_master_internal_ip }
+                __master2ip__: {get_param: second_master_internal_ip }
+                __master3ip__: {get_param: third_master_internal_ip }
+                __clustername__: { get_param: esearch_cluster_name }
+              template: |
+                #!/bin/bash
+                sudo apt-get -y update
+                sudo apt-get -y dist-upgrade 
+                sudo apt-get -y install apt-transport-https
+                echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-7.x.list
+                sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys D27D666CD88E42B4
+                sudo apt-get -y update && sudo apt-get -y install elasticsearch
+                echo "__master1ip__ __clustername__-master-1" >> /etc/hosts
+                echo "__master2ip__ __clustername__-master-2" >> /etc/hosts
+                echo "__master3ip__ __clustername__-master-3" >> /etc/hosts
+                echo "cluster.name: __clustername__" > /etc/elasticsearch/elasticsearch.yml
+                echo "network.host: $(hostname -s)" >> /etc/elasticsearch/elasticsearch.yml
+                echo "node.name: $(hostname -s)" >> /etc/elasticsearch/elasticsearch.yml
+                echo "path.data: /var/lib/elasticsearch" >> /etc/elasticsearch/elasticsearch.yml
+                echo "path.logs: /var/lib/elasticsearch" >> /etc/elasticsearch/elasticsearch.yml                
+                echo "xpack.security.enabled: false" >> /etc/elasticsearch/elasticsearch.yml               
+                echo "node.master: false" >> /etc/elasticsearch/elasticsearch.yml 
+                echo "node.data: true" >> /etc/elasticsearch/elasticsearch.yml
+                echo "node.ingest: false" >> /etc/elasticsearch/elasticsearch.yml
+                echo "discovery.zen.ping.unicast.hosts: [__master1ip__, __master2ip__, __master3ip__]" >> /etc/elasticsearch/elasticsearch.yml
+                service elasticsearch restart  
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+   
+
+  cloud_init_userdata_index:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_index}
+
+  cloud_config_index:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       bootcmd:
+        - setenforce 0
+       write_files:
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+                __master1ip__: {get_param: first_master_internal_ip }
+                __master2ip__: {get_param: second_master_internal_ip }
+                __master3ip__: {get_param: third_master_internal_ip }
+                __clustername__: { get_param: esearch_cluster_name }
+              template: |
+                #!/bin/bash
+                sudo apt-get -y update
+                sudo apt-get -y dist-upgrade 
+                sudo apt-get -y install apt-transport-https
+                echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-7.x.list
+                sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys D27D666CD88E42B4
+                sudo apt-get -y update && sudo apt-get -y install elasticsearch
+                echo "__master1ip__ __clustername__-master-1" >> /etc/hosts
+                echo "__master2ip__ __clustername__-master-2" >> /etc/hosts
+                echo "__master3ip__ __clustername__-master-3" >> /etc/hosts
+                echo "cluster.name: __clustername__" > /etc/elasticsearch/elasticsearch.yml
+                echo "network.host: $(hostname -s)" >> /etc/elasticsearch/elasticsearch.yml
+                echo "node.name: $(hostname -s)" >> /etc/elasticsearch/elasticsearch.yml
+                echo "path.data: /var/lib/elasticsearch" >> /etc/elasticsearch/elasticsearch.yml
+                echo "path.logs: /var/lib/elasticsearch" >> /etc/elasticsearch/elasticsearch.yml                
+                echo "xpack.security.enabled: false" >> /etc/elasticsearch/elasticsearch.yml               
+                echo "node.master: false" >> /etc/elasticsearch/elasticsearch.yml 
+                echo "node.data: false" >> /etc/elasticsearch/elasticsearch.yml
+                echo "node.ingest: true" >> /etc/elasticsearch/elasticsearch.yml
+                echo "discovery.zen.ping.unicast.hosts: [__master1ip__, __master2ip__, __master3ip__]" >> /etc/elasticsearch/elasticsearch.yml
+                service elasticsearch restart  
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+   
