@@ -10,11 +10,15 @@ parameter_groups:
   - master_flavor
   - data_flavor
   - index_flavor
+  - kibana_flavor
+  - logstash_flavor
+
 - label: Secuirty
   description: Cluster Secuirty Parameters
   parameters:
   - key_name
   - security_group
+
 - label: Network
   description: Cluster Network Parameters
   parameters:
@@ -45,6 +49,20 @@ parameters:
     type: string
     label: Data node flavor
     description: Flavor used for Data Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+
+  kibana_flavor:
+    type: string
+    label: Kibana node flavor
+    description: Flavor used for Kibana Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+
+  logstash_flavor:
+    type: string
+    label: Logstash node flavor
+    description: Flavor used for Logstash Nodes
     constraints:
       - custom_constraint: nova.flavor
 
@@ -175,63 +193,65 @@ resources:
           sequence: digits
 
 
-  monitor:
-    type: OS::Neutron::HealthMonitor
+  lb_index:
+    type: OS::Octavia::LoadBalancer
     properties:
+      vip_subnet: { get_param: internal_network_subnet_name }
+
+  listener_index:
+    type: OS::Octavia::Listener
+    properties:
+      loadbalancer: { get_resource: lb_index }
+      protocol: HTTP
+      protocol_port: 9200
+
+  pool_index:
+    type: OS::Octavia::Pool
+    properties:
+      listener: {get_resource: listener_index}
+      lb_algorithm: ROUND_ROBIN
+      protocol: HTTP
+      session_persistence:
+        type: SOURCE_IP
+
+  lb_monitor_index:
+    type: OS::Octavia::HealthMonitor
+    properties:
+      pool: { get_resource: pool_index }
       type: TCP
       delay: 15
       max_retries: 5
       timeout: 10
-      
 
-  lb_data_pool:
-    type: OS::Neutron::Pool
+  lb_data:
+    type: OS::Octavia::LoadBalancer
     properties:
-      name: 
-        str_replace:
-          template: $PART_CL-datalb
-          params:
-            $PART_CL: {get_param: esearch_cluster_name }
-      protocol: TCP
-      subnet_id: { get_param: internal_network_subnet_name }
-      lb_method: LEAST_CONNECTIONS
-      monitors: [ { get_resource: monitor } ]      
-      vip:
-        name: front_vip
-        address: { get_param: data_vip }
-        description: Front-end virtual IP (VIP)
-        protocol_port: 9200
-        
-  lb_index_pool:
-    type: OS::Neutron::Pool
+      vip_subnet: { get_param: internal_network_subnet_name }
+
+  listener_data:
+    type: OS::Octavia::Listener
     properties:
-      name: 
-        str_replace:
-          template: $PART_CL-indexlb
-          params:
-            $PART_CL: {get_param: esearch_cluster_name }
-      protocol: TCP
-      subnet_id: { get_param: internal_network_subnet_name }
-      lb_method: LEAST_CONNECTIONS
-      monitors: [ { get_resource: monitor } ]      
-      vip:
-        name: front_vip
-        address: { get_param: index_vip }
-        description: Front-end virtual IP (VIP)
-        protocol_port: 9200        
+      loadbalancer: { get_resource: lb_data }
+      protocol: HTTP
+      protocol_port: 9200
 
-  lb_data_lbaas:
-    type: OS::Neutron::LoadBalancer
-    properties: 
-      pool_id: { get_resource: lb_data_pool }
-      protocol_port: 9200   
-            
-  lb_index_lbaas:
-    type: OS::Neutron::LoadBalancer
-    properties: 
-      pool_id: { get_resource: lb_index_pool }
-      protocol_port: 9200                     
+  pool_data:
+    type: OS::Octavia::Pool
+    properties:
+      listener: {get_resource: listener_data}
+      lb_algorithm: ROUND_ROBIN
+      protocol: HTTP
+      session_persistence:
+        type: SOURCE_IP
 
+  lb_monitor_data:
+    type: OS::Octavia::HealthMonitor
+    properties:
+      pool: { get_resource: pool_data }
+      type: TCP
+      delay: 15
+      max_retries: 5
+      timeout: 10
 
 
   floating_ip_master1:
@@ -552,7 +572,7 @@ resources:
           template: $PART_CL-kibana-1
           params:
             $PART_CL: {get_param: esearch_cluster_name }
-      flavor: { get_param: kibana_lavor }
+      flavor: { get_param: kibana_flavor }
       image: Ubuntu Focal Server
       networks:
         - port: { get_resource: instance_port_kibana1 }
