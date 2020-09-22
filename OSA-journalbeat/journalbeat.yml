@@ -1,0 +1,15 @@
+journalbeat.inputs:
+- paths:
+  - /var/log/journal/
+
+setup.template.settings:
+  index.number_of_shards: 1
+
+output.logstash:
+  hosts: ["10.10.0.237:5044"]
+
+processors:
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+  - drop_fields:
+      fields: ["host"]
