@@ -152,15 +152,6 @@ parameters:
     default: Walz_Subnet
 
 resources:
-
-  wait_condition:
-    type: OS::Heat::WaitCondition
-    properties:
-      handle: {get_resource: wait_handle}      
-      timeout: 600
-
-  wait_handle:
-    type: OS::Heat::WaitConditionHandle
   
   name_gen_data1:
       type: OS::Heat::RandomString
@@ -200,22 +191,25 @@ resources:
 
   listener_index:
     type: OS::Octavia::Listener
+    depends_on: [ lb_index ]
     properties:
       loadbalancer: { get_resource: lb_index }
-      protocol: HTTP
+      protocol: TCP
       protocol_port: 9200
 
   pool_index:
     type: OS::Octavia::Pool
+    depends_on: [ listener_index ]
     properties:
-      listener: {get_resource: listener_index}
+      listener: { get_resource: listener_index }
       lb_algorithm: ROUND_ROBIN
-      protocol: HTTP
+      protocol: TCP
       session_persistence:
         type: SOURCE_IP
 
   lb_monitor_index:
     type: OS::Octavia::HealthMonitor
+    depends_on: [ pool_index ]
     properties:
       pool: { get_resource: pool_index }
       type: TCP
@@ -230,22 +224,25 @@ resources:
 
   listener_data:
     type: OS::Octavia::Listener
+    depends_on: [ lb_data ]
     properties:
       loadbalancer: { get_resource: lb_data }
-      protocol: HTTP
+      protocol: TCP
       protocol_port: 9200
 
   pool_data:
     type: OS::Octavia::Pool
+    depends_on: [ listener_data ]
     properties:
-      listener: {get_resource: listener_data}
+      listener: { get_resource: listener_data }
       lb_algorithm: ROUND_ROBIN
-      protocol: HTTP
+      protocol: TCP
       session_persistence:
         type: SOURCE_IP
 
   lb_monitor_data:
     type: OS::Octavia::HealthMonitor
+    depends_on: [ pool_data ]
     properties:
       pool: { get_resource: pool_data }
       type: TCP
@@ -477,6 +474,28 @@ resources:
       user_data:
        get_resource: cloud_init_userdata_data
 
+  data1_member:
+    type: OS::Octavia::PoolMember
+    properties:
+      pool: { get_resource: pool_data }
+      address: { get_attr: [data1, first_address] }
+      protocol_port: 9200
+      subnet: { get_param: internal_network_subnet_name }
+
+  data1_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: 300
+      volume_type: "ssd"
+      
+  data1_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: data1_volume }
+      instance_uuid: { get_resource: data1 }
+      mountpoint: /dev/vdb
+
+
   data2:
     type: OS::Nova::Server
     depends_on: [ master1, master2, master3 ]
@@ -498,6 +517,28 @@ resources:
       user_data:
        get_resource: cloud_init_userdata_data
 
+  data2_member:
+    type: OS::Octavia::PoolMember
+    properties:
+      pool: { get_resource: pool_data }
+      address: { get_attr: [data2, first_address] }
+      protocol_port: 9200
+      subnet: { get_param: internal_network_subnet_name }
+
+  data2_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: 300
+      volume_type: "ssd"
+      
+  data2_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: data2_volume }
+      instance_uuid: { get_resource: data2 }
+      mountpoint: /dev/vdb
+
+
   data3:
     type: OS::Nova::Server
     depends_on: [ master1, master2, master3 ]
@@ -518,6 +559,27 @@ resources:
       user_data_format: SOFTWARE_CONFIG
       user_data:
        get_resource: cloud_init_userdata_data
+
+  data3_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: 300
+      volume_type: "ssd"
+
+  data3_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: data3_volume }
+      instance_uuid: { get_resource: data3 }
+      mountpoint: /dev/vdb
+
+  data3_member:
+    type: OS::Octavia::PoolMember
+    properties:
+      pool: { get_resource: pool_data }
+      address: { get_attr: [data3, first_address] }
+      protocol_port: 9200
+      subnet: { get_param: internal_network_subnet_name }
 
   index1:
     type: OS::Nova::Server
@@ -696,7 +758,12 @@ resources:
                 echo "node.data: true" >> /etc/elasticsearch/elasticsearch.yml
                 echo "node.ingest: false" >> /etc/elasticsearch/elasticsearch.yml
                 echo "discovery.zen.ping.unicast.hosts: [__master1ip__, __master2ip__, __master3ip__]" >> /etc/elasticsearch/elasticsearch.yml
-                service elasticsearch restart  
+                service elasticsearch restart
+                service elasticsearch stop
+                mkfs.ext4 /dev/vdb
+                mount /dev/vdb /var/lib/elasticsearch
+                echo "/dev/vdb /var/lib/elasticsearch ext4 rw,relatime 0 0" >> /etc/fstab
+
        runcmd:
         - [ sh, -c, "/tmp/cloud_init.sh" ]
        final_message: "cloud-init has been run, after $UPTIME seconds"
