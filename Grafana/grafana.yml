@@ -1,0 +1,254 @@
+heat_template_version: 2018-08-31
+
+description: Template to deploy Prometheus/Influxdb/Grafana
+
+parameter_groups:
+- label: General
+  description: General Cluster Parameters
+  parameters:
+  - grafana_flavor
+  - prometheus_flavor
+  - influxdb_flavor
+
+- label: Secuirty
+  description: Cluster Secuirty Parameters
+  parameters:
+  - key_name
+  - security_group
+
+- label: Network
+  description: Cluster Network Parameters
+  parameters:
+  - external_network_name
+  - internal_network_name
+  - internal_network_subnet_name
+
+parameters:
+  grafana_flavor:
+    type: string
+    label: Grafana node flavor
+    description: Flavor used for Grafana Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+  
+  prometheus_flavor:
+    type: string
+    label: Prometheus node flavor
+    description: Flavor used for Prometheus Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+
+  influxdb_flavor:
+    type: string
+    label: Influxdb node flavor
+    description: Flavor used for Influxdb Nodes
+    constraints:
+      - custom_constraint: nova.flavor
+
+  security_group:
+    type: string
+    label: Security Group
+    description: SG Used for Nodes
+    default: default
+
+  key_name:
+    type: string
+    label: Key Pair
+    description: Name of an existing key pair to use for the instances
+    constraints:
+      - custom_constraint: nova.keypair
+        
+  external_network_name:
+    type: string
+    label: External Network Name
+    description: External Network to use for Folating IPs
+    constraints:
+      - custom_constraint: neutron.network
+
+  internal_network_name:
+    type: string
+    label: Internal Network Name
+    description: Internal Network to use for instance IPs
+    constraints:
+      - custom_constraint: neutron.network
+  
+  internal_network_subnet_name:
+    type: string
+    label: Internal Subnet Name
+    description: Internal Subnet to use for instance IPs
+    default: Walz_Subnet
+
+resources:
+  
+  instance_port_grafana:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }     
+        
+  instance_port_prometheus:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }      
+        
+  instance_port_influxdb:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_param: internal_network_name } 
+      security_groups:
+        - { get_param: security_group }
+      fixed_ips:
+        - subnet_id: { get_param: internal_network_subnet_name }       
+        
+
+  grafana:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: grafana
+      name: Grafana-1
+      flavor: { get_param: grafana_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_grafana }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_grafana
+
+  prometheus:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: prometheus
+      name: Prometheus-1
+      flavor: { get_param: prometheus_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_prometheus }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_prometheus
+
+  influxdb:
+    type: OS::Nova::Server
+    properties:
+      metadata:
+        type: influxdb
+      name: InfluxDB-1
+      flavor: { get_param: influxdb_flavor }
+      image: Ubuntu Focal Server
+      networks:
+        - port: { get_resource: instance_port_influxdb }
+      key_name: { get_param: key_name }
+      user_data_format: SOFTWARE_CONFIG
+      user_data:
+       get_resource: cloud_init_userdata_influxdb
+
+#  data2_volume:
+#    type: OS::Cinder::Volume
+#    properties:
+#      size: 300
+#      volume_type: "ssd"
+      
+#  data2_attachment:
+#    type: OS::Cinder::VolumeAttachment
+#    properties:
+#      volume_id: { get_resource: data2_volume }
+#      instance_uuid: { get_resource: data2 }
+#      mountpoint: /dev/vdb
+
+  cloud_init_userdata_grafana:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_grafana}
+
+  cloud_config_grafana:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       write_files:
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+                __master1ip__: 1
+              template: |
+                #!/bin/bash
+                sudo apt-get -y update
+                sudo apt-get -y dist-upgrade
+                sudo apt-get install -y apt-transport-https
+                sudo apt-get install -y software-properties-common wget
+                wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add
+                echo "deb https://packages.grafana.com/enterprise/deb stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list 
+                sudo apt-get -y update
+                sudo apt-get -y install grafana-enterprise
+                sudo /bin/systemctl daemon-reload
+                sudo /bin/systemctl enable grafana-server
+                sudo /bin/systemctl start grafana-server
+ 
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+
+  cloud_init_userdata_prometheus:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_prometheus}
+
+  cloud_config_prometheus:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       write_files:
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+                __master1ip__: 1
+              template: |
+                #!/bin/bash
+                sudo apt-get -y update
+                sudo apt-get -y dist-upgrade
+                sudo apt-get -y install prometheus
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
+
+  cloud_init_userdata_influxdb:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: {get_resource: cloud_config_influxdb}
+
+  cloud_config_influxdb:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+       write_files:
+        - path: /tmp/cloud_init.sh
+          permissions: "0755"
+          content:
+             str_replace:
+              params:
+                __master1ip__: 1
+              template: |
+                #!/bin/bash
+                sudo apt-get -y update
+                sudo apt-get -y dist-upgrade
+                sudo apt-get -y install influxdb
+       runcmd:
+        - [ sh, -c, "/tmp/cloud_init.sh" ]
+       final_message: "cloud-init has been run, after $UPTIME seconds"
